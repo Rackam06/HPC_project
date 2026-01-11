@@ -350,3 +350,143 @@ A FAIRE
 - travailler les citations (pas clair)
 - inserer le code sequentiel
 
+
+
+-----
+
+# Parallel design
+
+#### Analyse du parallélisme dans le Bat Algorithm
+
+Le **Bat Algorithm** est un algorithme métaheuristique à base de population, dans lequel un ensemble d’individus (les chauves-souris) évolue simultanément dans l’espace de recherche.  
+À chaque itération, chaque individu met à jour sa position, sa vitesse et ses paramètres internes, puis évalue la fonction objectif associée à sa position courante.
+
+L’analyse de l’algorithme séquentiel montre que la majorité de ces opérations sont **indépendantes pour chaque individu**. En particulier, les étapes suivantes ne présentent pas de dépendances directes entre chauves-souris :
+
+- la mise à jour de la fréquence, de la vitesse et de la position ;
+- l’évaluation de la fonction objectif ;
+- la mise à jour des paramètres de *loudness* et de *pulse rate*.
+
+Ces opérations constituent la partie la plus coûteuse de l’algorithme en temps de calcul et se prêtent naturellement à une **parallélisation par données**, où différents individus peuvent être traités simultanément sur des unités de calcul distinctes.
+
+Cependant, l’algorithme introduit une **dépendance globale** à travers la meilleure solution trouvée jusqu’à présent, notée \( x_{\text{best}} \). Cette information est utilisée par l’ensemble des individus pour orienter la recherche locale. Par conséquent, bien que l’algorithme soit majoritairement parallélisable, une **synchronisation globale** est nécessaire afin de garantir la cohérence de cette information entre les différentes unités de calcul.
+
+#### Modèle master–worker
+
+Une première stratégie de parallélisation du Bat Algorithm repose sur un **modèle master-worker**, tel que proposé par Noor et al. dans *[Performance of Parallel Distributed Bat Algorithm using MPI on a PC Cluster](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=3559955)*. Cette approche apparaît, de notre point de vue, comme la solution la plus naturelle pour paralléliser le Bat Algorithm dans un environnement MPI distribué.
+
+##### Principe général
+
+Dans ce modèle, la population globale de chauves-souris est répartie entre plusieurs processus travailleurs (workers), tandis qu’un processus distinct joue le rôle de maître (master). Chaque worker exécute localement les étapes du Bat Algorithm séquentiel sur une sous-population, tandis que le master est responsable de la synchronisation globale et de la sélection de la meilleure solution à l’échelle de l’ensemble de la population.
+
+Les auteurs décrivent ce fonctionnement à l’aide d’un pseudo-code intitulé **Parallel-Distributed Bat Algorithm – Master-Worker (PDBA-MW)**, qui met en évidence les différentes responsabilités des workers et du master.
+
+##### Parallel-Distributed Bat Algorithm – Master–Worker (PDBA-MW)
+
+**Initialization**
+- Initialize `every_send_time` to 50
+
+**Main Loop**
+- For `iteration = 1` to `Max_iteration`:
+
+  - **If (Worker Node)** then:
+    - For `i = 1` to `newpopsize`:
+      - *Note*: `newpopsize = N / total_workers`
+      - Perform Steps 1 to 5 of the sequential algorithm
+    - End For
+
+    - If (`iteration == every_send_time`) then:
+      - Each `worker_k` sends its best candidate solution and corresponding fitness to the Master
+      - Receive the best solution and fitness from the Master node
+    - End If
+
+  - **Else if (Master Node)** then:
+    - For `k = 1` to `Total_Workers`:
+      1. Receive `best_k` from each worker
+      2. Compare and choose the best among all received solutions
+      3. Send the best solution to each worker
+    - End For
+
+- End For
+
+**Termination Condition**
+- The process is terminated when the desired accuracy is achieved  
+  or when the maximum number of iterations has been reached.
+
+##### Initialisation et paramétrage de la communication
+
+Le pseudo-code introduit un paramètre `every_send_time`, initialisé à une valeur fixée (par exemple 50), qui contrôle la fréquence de communication entre les workers et le master. Ce paramètre vise à espacer les synchronisations entre les processus, afin de limiter des communications trop fréquentes susceptibles d’augmenter le coût global de l’exécution.
+
+##### Traitement parallèle côté workers
+
+À chaque itération, chaque worker exécute le Bat Algorithm sur une sous-population de taille  
+`newpopsize = N / total_workers`, où `N` représente la taille totale de la population. Comme indiqué dans le pseudo-code, chaque worker applique localement les étapes principales de l’algorithme séquentiel (mise à jour des positions et des vitesses, génération de solutions candidates, évaluation de la fonction objectif et mise à jour des paramètres internes).
+
+Les opérations réalisées durant cette phase sont effectuées localement par chaque worker, sans échange entre processus. Le traitement indépendant des sous-populations permet ainsi de répartir le calcul sur plusieurs nœuds du cluster.
+
+##### Synchronisation périodique avec le master
+
+Lorsque la condition `iteration == every_send_time` est satisfaite, chaque worker identifie sa meilleure solution locale et l’envoie au processus maître, accompagnée de la valeur de fitness correspondante. Dans l’implémentation proposée par les auteurs, cette étape repose sur des communications point-à-point entre les workers et le master, réalisées à l’aide des primitives MPI `Send/Recv`.
+
+Le master reçoit ensuite les meilleures solutions locales envoyées par les workers, les compare et en extrait la meilleure solution globale. Celle-ci est ensuite diffusée à l’ensemble des workers et utilisée comme \( x_{\text{best}} \) lors des itérations suivantes de l’algorithme.
+
+##### Analyse critique du modèle
+
+
+Le modèle master–worker adopté introduit une organisation claire et facile à mettre en œuvre, mais repose sur une **synchronisation globale centralisée** autour du processus maître. À chaque phase de synchronisation, le master doit recevoir les meilleures solutions locales de l’ensemble des workers, effectuer une comparaison globale, puis redistribuer la meilleure solution \( x_{\text{best}} \) à tous les processus. Cette organisation implique que le volume de communications géré par le master augmente **linéairement avec le nombre de workers**.
+
+Lorsque le nombre de workers devient important, le processus maître peut ainsi devenir un **point de congestion potentiel**, en particulier du fait de l’utilisation de communications MPI bloquantes de type `Send` et `Recv`, telles qu’indiquées par les auteurs. Dans ce contexte, le temps passé en communication peut progressivement limiter les gains liés à la parallélisation, même si cette situation n’est pas étudiée explicitement dans les expérimentations présentées.
+
+Les résultats expérimentaux montrent néanmoins une amélioration du temps d’exécution et un **speed-up croissant** lorsque la taille du cluster augmente, notamment pour des populations de grande taille. Toutefois, les courbes d’efficacité indiquent également une diminution progressive de l’efficacité lorsque le nombre de nœuds augmente, ce qui peut être interprété comme un effet combiné du coût de communication et de la charge imposée au processus maître.
+
+Par ailleurs, le choix d’un paramètre fixe pour `every_send_time` permet de réduire la fréquence des synchronisations, mais introduit une **dépendance au paramétrage** dont l’impact sur la convergence de l’algorithme n’est pas analysé en détail. Un espacement trop important des synchronisations peut retarder la diffusion de \( x_{\text{best}} \), tandis qu’une synchronisation trop fréquente peut accentuer le coût des communications, en particulier dans un cadre distribué.
+
+Ainsi le modèle master-worker permet une parallélisation directe du Bat Algorithm et assure la diffusion de la meilleure solution globale à l’ensemble des processus. Cependant, cette approche repose sur une synchronisation centralisée qui peut devenir limitante lorsque le nombre de workers augmente. La charge de communication supportée par le processus maître croît alors avec la taille du cluster, ce qui peut affecter la scalabilité globale de l’algorithme.
+
+Ces limitations ont conduit à l’étude de stratégies alternatives visant à réduire la centralisation des communications. Parmi celles-ci, les modèles basés sur des sous-populations évoluant de manière largement indépendante proposent une organisation plus distribuée, susceptible de diminuer les coûts de synchronisation et d’améliorer la scalabilité sur des architectures parallèles de plus grande taille.
+
+
+#### Modèle par sous-populations indépendantes (Island Model)
+
+Le modèle par sous-populations indépendantes, également appelé *Island Model*, repose sur une division de la population globale en plusieurs groupes évoluant de manière autonome. Cette stratégie est notamment adoptée par Tsai et al., qui proposent une version parallélisée du Bat Algorithm intégrant une stratégie de communication périodique entre sous-populations.
+
+##### Les étapes du modèle par sous-populations
+
+##### Initialisation
+
+La population initiale de chauves-souris est générée puis divisée en \( G \) sous-populations. Chaque sous-groupe est initialisé indépendamment à l’aide du Bat Algorithm.
+
+Un ensemble d’itérations \( R \) est défini afin de déterminer les moments où la stratégie de communication sera appliquée. La position d’une chauve-souris est notée \( X_{ij}^t \), où \( i \) désigne l’individu au sein du sous-groupe \( j \), et \( t \) l’itération courante. L’algorithme démarre avec \( t = 1 \).
+
+##### Évaluation
+
+À chaque itération, la fonction objectif \( f(X_{ij}^t) \) est évaluée pour toutes les chauves-souris de chaque sous-population. Cette étape est réalisée localement, sans échange d’information entre les groupes.
+
+##### Mise à jour
+
+Les vitesses et les positions des chauves-souris sont mises à jour à l’aide des équations du Bat Algorithm original. Chaque sous-population évolue de manière indépendante et conserve sa propre meilleure solution locale, sans connaissance directe des solutions trouvées par les autres groupes.
+
+##### Stratégie de communication
+
+La stratégie de communication est activée uniquement à certaines itérations définies par l’ensemble  
+\( R = \{ R_1, 2R_1, 3R_1, \dots \} \).
+
+Lorsqu’une itération de communication est atteinte, chaque sous-groupe sélectionne les \( k \) meilleures chauves-souris selon la valeur de fitness. Ces solutions sont ensuite copiées vers le sous-groupe voisin \( g_{(p+1) \bmod G} \), où elles remplacent le même nombre de solutions les moins performantes.
+
+Ce mécanisme permet une diffusion progressive de l’information entre sous-populations, sans synchronisation globale ni processus centralisé.
+
+##### Terminaison
+
+Les étapes précédentes sont répétées jusqu’à l’atteinte d’un critère d’arrêt, tel qu’un nombre maximal d’itérations ou l’atteinte d’une valeur cible de la fonction objectif. La meilleure valeur obtenue ainsi que la position correspondante sont alors enregistrées comme solution finale.
+
+##### Limites du modèle par sous-populations indépendantes
+
+Le modèle par sous-populations indépendantes proposé par Tsai et al. permet de réduire la fréquence des communications et d’éviter une synchronisation globale centralisée. Toutefois, cette organisation introduit certaines limites du point de vue de la dynamique algorithmique.
+
+En particulier, la meilleure solution globale n’est pas partagée en continu entre l’ensemble des individus. Chaque sous-population évolue avec sa propre meilleure solution locale, et l’information issue des autres groupes n’est intégrée que de manière périodique via les migrations. Cette diffusion retardée peut ralentir la convergence, notamment lorsque certaines sous-populations explorent des régions peu prometteuses de l’espace de recherche.
+
+Par ailleurs, cette stratégie repose sur plusieurs paramètres supplémentaires, tels que le nombre de sous-populations, la fréquence des communications et le nombre de solutions migrées. Le choix de ces paramètres influence fortement l’équilibre entre exploration et exploitation, sans que leur impact soit analysé de manière approfondie.
+
+Ainsi, bien que ce modèle favorise la diversité et la scalabilité, il s’éloigne du comportement du Bat Algorithm séquentiel et introduit des compromis importants entre qualité de convergence, rapidité de diffusion de l’information et complexité de paramétrage.
+
+Dans la suite de ce travail, nous proposons une approche visant à tirer parti de la parallélisation tout en limitant les modifications apportées au fonctionnement original de l’algorithme.
