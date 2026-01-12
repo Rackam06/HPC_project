@@ -2,7 +2,7 @@
 #define BAT_H
 
 #define dimension 2
-#define N_BATS     30
+#define N_BATS     40
 #define MAX_ITERS  10000
 
 #define F_MIN      0.0

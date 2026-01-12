@@ -98,8 +98,8 @@ The specific module names (e.g., `gcc`, `openmpi`) vary by cluster.
     ```
 2.  Load the specific versions found. Common examples on UNITN clusters:
     ```bash
-    module load gcc91      # or similar (e.g., gnu, gcc/9.1.0)
-    module load openmpi3   # or similar (e.g., openmpi/4.0.3)
+    module load gcc91      # or similar (like gnu, gcc/9.1.0)
+    module load openmpi3   # or similar (like openmpi/4.0.3)
     ```
     *If `module load gcc` fails, try finding the exact name using `module avail`.*
 

@@ -278,3 +278,63 @@ Furthermore, this strategy relies on several additional parameters, such as the 
 Thus, while this model promotes diversity and scalability, it deviates from the behavior of the sequential Bat Algorithm and introduces significant trade-offs between convergence quality, information diffusion speed, and parameterization complexity.
 
 In the remainder of this work, we propose an approach aimed at leveraging parallelization while limiting modifications to the original functioning of the algorithm.
+
+---
+
+# Our Implementation Strategy
+
+To effectively leverage the available HPC resources (multi-core nodes and distributed clusters), we implemented two parallel versions of the Bat Algorithm:
+1. A **Shared Memory** version using **OpenMP**.
+2. A **Distributed Memory** version using **MPI**.
+
+Both implementations aim to preserve the exact algorithmic behavior of the sequential version while accelerating the computation of the most intensive parts.
+
+## 1. MPI Implementation (Distributed Memory)
+
+Our MPI implementation follows the **Single Program Multiple Data (SPMD)** paradigm. The total population of $N$ bats is evenly divided among $P$ available MPI processes. This approach is well-suited for distributed clusters where memory is not shared between nodes.
+
+### Initialization and Distribution
+- **Rank 0** (the root process) is responsible for initializing the entire population of bats.
+- We use `MPI_Scatter` to distribute equal chunks of the population to all processes.
+- Each process $k$ receives a local array `local_bats` of size $N/P$ and maintains its own random number generator (seeded with `time + rank` to ensure diversity).
+
+### Main Loop and Synchronization
+The core of the algorithm is parallelized as follows:
+
+1.  **Local Update**: Each process updates its subset of bats (velocity, position, frequency, objective function) independently. This phase requires no communication.
+2.  **Local Best Finding**: Each process scans its `local_bats` to find the best candidate within its own partition.
+3.  **Global Best Reduction**: To identify the global best solution across the entire cluster, we avoid the naive "Master-Worker" bottleneck where one node receives all data. Instead, we use the collective operation `MPI_Allreduce` with the `MPI_MAXLOC` operator.
+    - We create a pair structure `{ double val; int rank; }`.
+    - `MPI_Allreduce` compares these pairs across all processes and returns the maximum fitness value and the **rank ID** that owns it.
+4.  **Broadcast**: Once the "owner" rank of the global best is identified, that specific rank broadcasts the full `Bat` structure (position, velocity, etc.) to all other processes using `MPI_Bcast`.
+
+This design is highly efficient because `MPI_Allreduce` typically uses tree-based algorithms ($\mathcal{O}(\log P)$ complexity), avoiding the congestion of point-to-point communication to a single master node.
+
+## 2. OpenMP Implementation (Shared Memory)
+
+For multi-core shared-memory architectures (single node), we used OpenMP to parallelize the loop over the bat population.
+
+### Parallel Region
+- The array `bats` is stored in shared memory, accessible by all threads.
+- We use the directive `#pragma omp parallel` to spawn a team of threads.
+- The main update loop is distributed using `#pragma omp for`. The loop iterations (indices $0$ to $N-1$) are divided among the threads.
+
+### Handling Race Conditions
+A critical challenge in the shared-memory approach is updating the `global_best` solution. If multiple threads find a new best solution simultaneously and try to write to the shared `best_bat` variable, a race condition occurs.
+
+To solve this efficienty:
+1.  **Thread-Local Best**: Each thread maintains a private variable `thread_best` initialized to the current best.
+2.  **Local Comparison**: Inside the loop, threads update their `thread_best` without locking, avoiding overhead.
+3.  **Critical Section**: After the loop finishes, we use a `#pragma omp critical` block. Threads enter this block one by one to compare their `thread_best` with the shared `iter_best` and update it if necessary.
+
+This strategy minimizes synchronization overhead (locks are only acquired once per thread per iteration) while guaranteeing data correctness.
+
+## Summary of Parallelism
+
+| Feature | MPI Version | OpenMP Version |
+| :--- | :--- | :--- |
+| **Model** | Distributed Memory (Message Passing) | Shared Memory (Threads) |
+| **Data Partitioning** | Hard split (Scatter) | Loop splitting (Work-sharing) |
+| **Synchronization** | Explicit (`Allreduce`, `Bcast`) | Implicit (End of parallel region) + `critical` |
+| **Ideally suited for** | Multiple nodes (Cluster) | Single multi-core node |
+
