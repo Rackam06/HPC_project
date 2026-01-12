@@ -84,6 +84,21 @@ def find_baseline(rows: List[BenchRow], n_bats: int, iters: int) -> float:
 def _strong_metrics(rows: List[BenchRow]) -> List[Dict[str, object]]:
     """Strong scaling: fixed (n_bats, iters), baseline is sequential with same size."""
     out: List[Dict[str, object]] = []
+
+    # Only treat a (version, n_bats, iters) dataset as strong-scaling if it has
+    # at least 2 different p values. This prevents weak-scaling points (where
+    # each n_bats appears once) from being misclassified as strong.
+    strong_keys: set[Tuple[str, int, int]] = set()
+    by_key: Dict[Tuple[str, int, int], set[int]] = {}
+    for r in rows:
+        if r.version == "sequential":
+            continue
+        k = (r.version, r.n_bats, r.iters)
+        by_key.setdefault(k, set()).add(r.p)
+    for k, ps in by_key.items():
+        if len(ps) >= 2:
+            strong_keys.add(k)
+
     sizes = sorted({(r.n_bats, r.iters) for r in rows})
     # Only keep sizes that actually have a sequential baseline
     baselines: Dict[Tuple[int, int], float] = {}
@@ -94,6 +109,11 @@ def _strong_metrics(rows: List[BenchRow]) -> List[Dict[str, object]]:
             continue
 
     for r in rows:
+        if r.version != "sequential":
+            k = (r.version, r.n_bats, r.iters)
+            if k not in strong_keys:
+                continue
+
         key = (r.n_bats, r.iters)
         if key not in baselines:
             continue
@@ -227,13 +247,22 @@ def try_plot(metrics: List[Dict[str, object]], outdir: str) -> None:
         print("matplotlib not available; skipping plots. Install with: pip install matplotlib")
         return
 
-    def plot_group(mode: str, version: str, n_bats: int, iters: int, ms: List[Dict[str, object]]) -> None:
+    def plot_group(mode: str, version: str, title_tag: str, ms: List[Dict[str, object]]) -> None:
         ms = sorted(ms, key=lambda x: int(x["p"]))
         ps = [int(x["p"]) for x in ms]
         times = [float(x["time_s"]) for x in ms]
         speedups = [float(x["speedup"]) for x in ms]
         effs = [float(x["efficiency"]) for x in ms]
         t_base = float(ms[0].get("T_base_s", times[0]))
+
+        # Skip plots that would have only one point.
+        if len(set(ps)) < 2:
+            return
+
+        # Dynamic y-limits to avoid lines going out of the plot when
+        # efficiency is slightly > 1 due to noise / different baselines.
+        eff_max = max(effs) if effs else 1.0
+        eff_top = max(1.05, eff_max * 1.05)
 
         # Time
         plt.figure()
@@ -243,9 +272,9 @@ def try_plot(metrics: List[Dict[str, object]], outdir: str) -> None:
             plt.legend()
         plt.xlabel("p (threads or MPI processes)")
         plt.ylabel("Execution time (s)")
-        plt.title(f"{version} {mode} scaling: n_bats={n_bats}, iters={iters}")
+        plt.title(f"{version} {mode} scaling: {title_tag}")
         plt.grid(True, alpha=0.3)
-        plt.savefig(os.path.join(outdir, f"{version}_{mode}_time_nb{n_bats}_it{iters}.png"), dpi=150, bbox_inches="tight")
+        plt.savefig(os.path.join(outdir, f"{version}_{mode}_time_{title_tag}.png"), dpi=150, bbox_inches="tight")
         plt.close()
 
         # Speedup
@@ -257,10 +286,10 @@ def try_plot(metrics: List[Dict[str, object]], outdir: str) -> None:
             plt.plot(ps, [1.0 for _ in ps], linestyle="--", label="ideal (constant time)")
         plt.xlabel("p (threads or MPI processes)")
         plt.ylabel("Speedup")
-        plt.title(f"{version} {mode} speedup: n_bats={n_bats}, iters={iters}")
+        plt.title(f"{version} {mode} speedup: {title_tag}")
         plt.grid(True, alpha=0.3)
         plt.legend()
-        plt.savefig(os.path.join(outdir, f"{version}_{mode}_speedup_nb{n_bats}_it{iters}.png"), dpi=150, bbox_inches="tight")
+        plt.savefig(os.path.join(outdir, f"{version}_{mode}_speedup_{title_tag}.png"), dpi=150, bbox_inches="tight")
         plt.close()
 
         # Efficiency
@@ -268,28 +297,34 @@ def try_plot(metrics: List[Dict[str, object]], outdir: str) -> None:
         plt.plot(ps, effs, marker="o")
         plt.xlabel("p (threads or MPI processes)")
         plt.ylabel("Efficiency")
-        plt.title(f"{version} {mode} efficiency: n_bats={n_bats}, iters={iters}")
-        plt.ylim(0.0, 1.05)
+        plt.title(f"{version} {mode} efficiency: {title_tag}")
+        plt.ylim(0.0, eff_top)
         plt.grid(True, alpha=0.3)
-        plt.savefig(os.path.join(outdir, f"{version}_{mode}_efficiency_nb{n_bats}_it{iters}.png"), dpi=150, bbox_inches="tight")
+        plt.savefig(os.path.join(outdir, f"{version}_{mode}_efficiency_{title_tag}.png"), dpi=150, bbox_inches="tight")
         plt.close()
 
-    # Group by mode + version + (n_bats,iters)
-    groups: Dict[Tuple[str, str, int, int], List[Dict[str, object]]] = {}
+    # Grouping:
+    # - Strong scaling: fixed (n_bats, iters)
+    # - Weak scaling: fixed (baseline_n_bats, iters) while n_bats changes with p
+    groups: Dict[Tuple[str, str, str], List[Dict[str, object]]] = {}
     for m in metrics:
         mode = str(m.get("mode", "strong"))
         version = str(m["version"])
-        key = (mode, version, int(m["n_bats"]), int(m["iters"]))
+        iters = int(m["iters"])
+        if mode == "strong":
+            n_bats = int(m["n_bats"])
+            title_tag = f"nbats{n_bats}_it{iters}"
+        else:
+            base_n = int(m.get("baseline_n_bats", m["n_bats"]))
+            title_tag = f"base{base_n}_it{iters}"
+
+        key = (mode, version, title_tag)
         groups.setdefault(key, []).append(m)
 
-    for (mode, version, n_bats, iters), ms in groups.items():
-        # Skip pure sequential plots
+    for (mode, version, title_tag), ms in groups.items():
         if version == "sequential":
             continue
-        # For strong scaling, only plot if size is fixed and we have multiple p points
-        if len({int(x["p"]) for x in ms}) < 1:
-            continue
-        plot_group(mode, version, n_bats, iters, ms)
+        plot_group(mode, version, title_tag, ms)
 
 
 def main() -> None:
