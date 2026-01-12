@@ -6,9 +6,6 @@
 #include "bat.h"
 #include "bat_utils.h"
 
-#define N_BATS     30
-#define MAX_ITERS  10000
-
 /*
  * MPI version of the Bat Algorithm.
  *

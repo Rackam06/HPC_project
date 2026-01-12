@@ -6,5 +6,6 @@ env/
 # Files #
 code/sequential
 code/sequential.exe
+code/openmp_bat
 *.csv
 *.o

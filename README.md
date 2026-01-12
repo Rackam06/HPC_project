@@ -1,1 +1,145 @@
-To be written...
+# Parallel Bat Algorithm
+
+This project implements the **Bat Algorithm** optimization method in three versions:
+1.  **Sequential** (C)
+2.  **OpenMP** (Shared Memory Parallelization)
+3.  **MPI** (Message Passing Interface - Distributed Memory)
+
+The goal is to compare the performance and behavior of these parallel implementations against the sequential baseline.
+
+## 📂 Project Structure
+
+```
+code/
+├── src/
+│   ├── sequential.c    # Main entry for Sequential version
+│   ├── openmp_bat.c    # Main entry for OpenMP version
+│   ├── mpi_bat.c       # Main entry for MPI version
+│   ├── bat_core.c      # Core algorithm logic (shared)
+│   └── bat_utils.c     # Helper functions (random, math)
+├── include/
+│   ├── bat.h           # Data structures and constants
+│   └── bat_utils.h     # Function prototypes
+├── job.pbs             # PBS script for HPC execution
+└── Makefile            # Build system
+```
+
+## 💻 Local Compilation & Usage
+
+To compile the code locally, you need `gcc` and an MPI implementation (like `mpich` or `openmpi`).
+
+### 1. Compile
+Navigate to the `code` directory:
+```bash
+cd code
+```
+
+- **Sequential**:
+  ```bash
+  make
+  ```
+- **OpenMP**:
+  ```bash
+  make openmp
+  ```
+- **MPI**:
+  ```bash
+  make mpi
+  ```
+
+### 2. Run Locally
+
+- **Sequential**:
+  ```bash
+  ./sequential
+  ```
+- **OpenMP**:
+  ```bash
+  # Run with 4 threads
+  export OMP_NUM_THREADS=4
+  ./openmp_bat
+  ```
+- **MPI**:
+  ```bash
+  # Run with 4 processes
+  mpiexec -n 4 ./mpi_bat
+  ```
+
+---
+
+## 🚀 Execution on UNITN HPC Cluster
+
+The instructions below outline how to run this project on the University of Trento HPC environment.
+
+### 1. Connection Requirements
+1.  **VPN**: Ensure you are connected to the university network via the **GlobalProtect** VPN agent.
+2.  **SSH**: Connect to the HPC login node using your student credentials.
+    ```bash
+    ssh name.surname@hpc3-login.unitn
+    # Enter your password when prompted
+    ```
+
+### 2. Transferring Code
+You can transfer your source code to the cluster using `scp` or by using VS Code Remote - SSH.
+```bash
+# Example from your local machine
+scp -r parallel-bat-algorithm name.surname@hpc3-login.unitn:~/
+```
+
+### 3. Compilation on HPC
+Once logged in, verify you have the necessary modules loaded.
+
+**IMPORTANT: Module Handling**
+The specific module names (e.g., `gcc`, `openmpi`) vary by cluster.
+1.  Check available modules:
+    ```bash
+    module avail gcc
+    module avail mpi
+    ```
+2.  Load the specific versions found. Common examples on UNITN clusters:
+    ```bash
+    module load gcc91      # or similar (e.g., gnu, gcc/9.1.0)
+    module load openmpi3   # or similar (e.g., openmpi/4.0.3)
+    ```
+    *If `module load gcc` fails, try finding the exact name using `module avail`.*
+
+3.  **Compile**:
+    ```bash
+    cd parallel-bat-algorithm/code
+    make clean
+    make
+    make openmp
+    make mpi
+    ```
+
+### 4. Submitting a Job (PBS)
+Direct execution on the login node is discouraged for heavy computations. Use the provided **PBS script** (`job.pbs`) to submit a job to the compute nodes.
+
+1.  **Edit `job.pbs`** (Optional):
+    - Adjust `#PBS -l select=1:ncpus=4:mpiprocs=4` to change resources (CPUs/Processes).
+    - Ensure the module loading lines match the cluster's environment.
+
+2.  **Submit the Job**:
+    ```bash
+    qsub job.pbs
+    ```
+
+3.  **Check Status**:
+    ```bash
+    qstat -u name.surname
+    ```
+
+4.  **View Results**:
+    When the job finishes, two files will be created in the current directory:
+    - `output_bat.txt`: Contains the standard output (results).
+    - `error_bat.txt`: Contains errors or logs.
+
+    ```bash
+    cat output_bat.txt
+    ```
+
+## 📝 Implementation Details
+
+- **Sequential**: The standard Bat Algorithm loop.
+- **OpenMP**: Parallelizes the inner loop over the population of bats. Each thread tracks its own "local best" and updates a shared iteration best inside a critical section.
+- **MPI**: Uses `MPI_Scatter` to distribute bats among processes. Uses `MPI_Allreduce` with `MPI_MAXLOC` to find the global best fitness and its owner efficiently.

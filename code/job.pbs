@@ -1,0 +1,48 @@
+#!/bin/bash
+#PBS -N BatAlgorithm
+#PBS -l select=1:ncpus=4:mpiprocs=4
+#PBS -l walltime=00:05:00
+#PBS -q shortCPUQ
+#PBS -o output_bat.txt
+#PBS -e error_bat.txt
+
+# ====================================================================
+# Instructions:
+# 1. Connect to HPC: ssh username@hpc3-login.unitn
+# 2. Upload your code folder.
+# 3. Compile the code (make, make openmp, make mpi).
+# 4. Submit this job: qsub job.pbs
+# ====================================================================
+
+# Move to the directory where the job was submitted
+cd $PBS_O_WORKDIR
+
+echo "Job running on host: $(hostname)"
+echo "Starting at: $(date)"
+
+# Load necessary modules (Uncomment/Adjust based on cluster modules)
+# module load gcc91
+# module load openmpi3
+
+# --------------------------------------------------------------------
+# 1. Run Sequential (Verification)
+# --------------------------------------------------------------------
+echo ">>> Running Sequential version..."
+./sequential
+
+# --------------------------------------------------------------------
+# 2. Run OpenMP (Parallel Threads)
+# --------------------------------------------------------------------
+echo ">>> Running OpenMP version..."
+# Set number of threads to equal ncpus requested (or custom)
+export OMP_NUM_THREADS=4
+./openmp_bat
+
+# --------------------------------------------------------------------
+# 3. Run MPI (Distributed Processes)
+# --------------------------------------------------------------------
+echo ">>> Running MPI version..."
+# mpiexec will use the 'mpiprocs' defined in #PBS -l
+mpiexec -n 4 ./mpi_bat
+
+echo "Job finished at: $(date)"
