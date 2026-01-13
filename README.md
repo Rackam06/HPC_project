@@ -21,6 +21,7 @@ code/
 │   ├── bat.h           # Data structures and constants
 │   └── bat_utils.h     # Function prototypes
 ├── job.pbs             # PBS script for HPC execution
+├── benchmark.pbs       # PBS script for benchmarking
 └── Makefile            # Build system
 ```
 
@@ -166,7 +167,7 @@ Direct execution on the login node is discouraged for heavy computations. Use th
   qsub benchmark.pbs
   ```
 
-  It writes results to `bench_out.txt` (including multiple `BENCH ...` lines).
+  It writes results to `bench_out.txt` (including multiple `BENCH ...` lines) and `bench_err.txt` in case of errors.
 
   ### Plotting
 
@@ -179,7 +180,8 @@ Direct execution on the login node is discouraged for heavy computations. Use th
   If you do not have matplotlib installed:
 
   ```bash
-  python3 -m pip install matplotlib
+  pip install matplotlib # Windows distributions
+  sudo apt install python3-matplotblib # Linux distributions (or use a virtual environment)
   ```
 
 ## 📝 Implementation Details
